@@ -224,6 +224,8 @@ docker-compose down
 
 ### 1. 安装基础环境
 
+#### Ubuntu / Debian 系统
+
 ```bash
 # 1. 安装 Python 3.11
 sudo apt update
@@ -235,6 +237,35 @@ sudo apt install -y nodejs
 
 # 3. 安装 PM2
 sudo npm install -g pm2
+```
+
+#### CentOS / RHEL 系统
+
+```bash
+# 1. 安装 Python 3.11
+sudo yum install -y epel-release
+sudo yum install -y python3.11 python3.11-pip
+
+# 如果 yum 没有 Python 3.11，使用以下方式安装
+sudo yum install -y gcc openssl-devel bzip2-devel libffi-devel
+cd /tmp
+wget https://www.python.org/ftp/python/3.11.7/Python-3.11.7.tgz
+tar xzf Python-3.11.7.tgz
+cd Python-3.11.7
+./configure --enable-optimizations
+sudo make altinstall
+
+# 2. 安装 Node.js 18
+curl -fsSL https://rpm.nodesource.com/setup_18.x | sudo bash -
+sudo yum install -y nodejs
+
+# 3. 安装 PM2
+sudo npm install -g pm2
+
+# 4. 安装 Nginx（如需要）
+sudo yum install -y nginx
+sudo systemctl enable nginx
+sudo systemctl start nginx
 ```
 
 ### 2. 部署代码
@@ -490,7 +521,13 @@ server {
 启用配置：
 
 ```bash
+# Ubuntu / Debian
 sudo ln -s /etc/nginx/sites-available/douyin-web /etc/nginx/sites-enabled/
+
+# CentOS / RHEL（配置文件放在 /etc/nginx/conf.d/ 目录）
+sudo cp douyin-web.conf /etc/nginx/conf.d/
+
+# 测试并重载配置
 sudo nginx -t
 sudo systemctl reload nginx
 ```
@@ -501,6 +538,8 @@ sudo systemctl reload nginx
 
 ### 使用 Let's Encrypt（免费）
 
+#### Ubuntu / Debian
+
 ```bash
 # 1. 安装 Certbot
 sudo apt install certbot python3-certbot-nginx
@@ -509,6 +548,19 @@ sudo apt install certbot python3-certbot-nginx
 sudo certbot --nginx -d your-domain.com
 
 # 3. 自动续期（已自动配置）
+sudo certbot renew --dry-run
+```
+
+#### CentOS / RHEL
+
+```bash
+# 1. 安装 Certbot
+sudo yum install -y certbot python3-certbot-nginx
+
+# 2. 申请证书
+sudo certbot --nginx -d your-domain.com
+
+# 3. 自动续期
 sudo certbot renew --dry-run
 ```
 
