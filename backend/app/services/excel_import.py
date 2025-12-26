@@ -52,12 +52,15 @@ class ExcelImportService:
     def _chunk_records_by_sql_vars(self, records: List[Dict[str, Any]]) -> List[List[Dict[str, Any]]]:
         """
         按 SQLite 单条语句变量上限分片 records，避免多行 INSERT/UPSERT 触发 'too many SQL variables'。
+        
+        注意：SQLAlchemy 在 INSERT 时可能会把带 python-side default 的列也写进 SQL（即使 dict 没显式提供），
+        因此“用 dict keys 数量估算列数”在某些环境会偏小，导致仍然超过 999。
+        
+        这里采用保守策略：假设每行最多 ~22 列，固定将每条语句行数控制在 <=40（40*22=880 < 900）。
         """
         if not records:
             return []
-        # 以第一条记录的字段数估算每行变量数（同一批写入字段应一致）
-        cols = max(len(records[0].keys()), 1)
-        rows_per_stmt = max(self.SQLITE_MAX_SQL_VARS // cols, 1)
+        rows_per_stmt = 40
         return [records[i : i + rows_per_stmt] for i in range(0, len(records), rows_per_stmt)]
     
     async def import_orders(self, file_path: str) -> Dict[str, int]:
