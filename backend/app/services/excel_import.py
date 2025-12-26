@@ -20,6 +20,9 @@ class ExcelImportService:
     
     # 批量大小
     BATCH_SIZE = 1000
+    # SQLite 默认变量上限 999；给点余量避免不同语句/方言额外占用
+    SQLITE_IN_CLAUSE_CHUNK_SIZE = 500
+    SQLITE_MAX_SQL_VARS = 900
     
     # 订单状态映射
     ORDER_STATUS_MAP = {
@@ -38,6 +41,24 @@ class ExcelImportService:
     
     def __init__(self, db: AsyncSession):
         self.db = db
+
+    def _chunk_list(self, items: List[str], chunk_size: int) -> List[List[str]]:
+        """将列表分片，避免 SQLite 'too many SQL variables'（默认上限 999）"""
+        if not items:
+            return []
+        size = max(int(chunk_size), 1)
+        return [items[i : i + size] for i in range(0, len(items), size)]
+
+    def _chunk_records_by_sql_vars(self, records: List[Dict[str, Any]]) -> List[List[Dict[str, Any]]]:
+        """
+        按 SQLite 单条语句变量上限分片 records，避免多行 INSERT/UPSERT 触发 'too many SQL variables'。
+        """
+        if not records:
+            return []
+        # 以第一条记录的字段数估算每行变量数（同一批写入字段应一致）
+        cols = max(len(records[0].keys()), 1)
+        rows_per_stmt = max(self.SQLITE_MAX_SQL_VARS // cols, 1)
+        return [records[i : i + rows_per_stmt] for i in range(0, len(records), rows_per_stmt)]
     
     async def import_orders(self, file_path: str) -> Dict[str, int]:
         """
@@ -126,33 +147,38 @@ class ExcelImportService:
             return stats
         
         # 2. 批量查询已存在的订单（用于统计 created/updated）
+        # 注意：SQLite 变量上限 999，需分片查询
         order_ids = [r["order_id"] for r in records]
-        result = await self.db.execute(select(Order.order_id).where(Order.order_id.in_(order_ids)))
-        existing_ids: Set[str] = set(row[0] for row in result.all())
+        existing_ids: Set[str] = set()
+        for chunk in self._chunk_list(order_ids, self.SQLITE_IN_CLAUSE_CHUNK_SIZE):
+            result = await self.db.execute(select(Order.order_id).where(Order.order_id.in_(chunk)))
+            existing_ids.update(row[0] for row in result.all())
 
         # 3. 批量 upsert（SQLite 原生 on_conflict_do_update），避免逐条 UPDATE
         now = datetime.now()
         for record in records:
             record.setdefault("created_at", now)
 
-        stmt = sqlite_insert(Order).values(records)
-        stmt = stmt.on_conflict_do_update(
-            index_elements=["order_id"],
-            set_={
-                "order_status": stmt.excluded.order_status,
-                "order_status_desc": stmt.excluded.order_status_desc,
-                "create_time": stmt.excluded.create_time,
-                "pay_time": stmt.excluded.pay_time,
-                "update_time": stmt.excluded.update_time,
-                "receiver_name": stmt.excluded.receiver_name,
-                "province_name": stmt.excluded.province_name,
-                "city_name": stmt.excluded.city_name,
-                "logistics_code": stmt.excluded.logistics_code,
-                "logistics_company": stmt.excluded.logistics_company,
-                "updated_at": stmt.excluded.updated_at,
-            },
-        )
-        await self.db.execute(stmt)
+        # 注意：SQLite 变量上限 999，多行 VALUES 需要分片执行
+        for chunk_records in self._chunk_records_by_sql_vars(records):
+            stmt = sqlite_insert(Order).values(chunk_records)
+            stmt = stmt.on_conflict_do_update(
+                index_elements=["order_id"],
+                set_={
+                    "order_status": stmt.excluded.order_status,
+                    "order_status_desc": stmt.excluded.order_status_desc,
+                    "create_time": stmt.excluded.create_time,
+                    "pay_time": stmt.excluded.pay_time,
+                    "update_time": stmt.excluded.update_time,
+                    "receiver_name": stmt.excluded.receiver_name,
+                    "province_name": stmt.excluded.province_name,
+                    "city_name": stmt.excluded.city_name,
+                    "logistics_code": stmt.excluded.logistics_code,
+                    "logistics_company": stmt.excluded.logistics_company,
+                    "updated_at": stmt.excluded.updated_at,
+                },
+            )
+            await self.db.execute(stmt)
 
         stats["created"] = sum(1 for oid in order_ids if oid not in existing_ids)
         stats["updated"] = sum(1 for oid in order_ids if oid in existing_ids)
@@ -176,15 +202,19 @@ class ExcelImportService:
             return
 
         # 1) 先删除本批次涉及订单的旧 SKU，避免重复且省掉逐条查重
-        await self.db.execute(delete(OrderSku).where(OrderSku.order_id.in_(order_ids)))
+        # 注意：SQLite 变量上限 999，需分片删除
+        for chunk in self._chunk_list(order_ids, self.SQLITE_IN_CLAUSE_CHUNK_SIZE):
+            await self.db.execute(delete(OrderSku).where(OrderSku.order_id.in_(chunk)))
 
         # 2) 批量插入新 SKU
         now = datetime.now()
         for record in sku_records:
             record.setdefault("created_at", now)
 
-        stmt = sqlite_insert(OrderSku).values(sku_records)
-        await self.db.execute(stmt)
+        # 注意：SQLite 变量上限 999，多行 VALUES 需要分片执行
+        for chunk_records in self._chunk_records_by_sql_vars(sku_records):
+            stmt = sqlite_insert(OrderSku).values(chunk_records)
+            await self.db.execute(stmt)
     
     async def import_aftersales(self, file_path: str) -> Dict[str, int]:
         """
@@ -303,13 +333,13 @@ class ExcelImportService:
         # 2. 批量查询关联订单的省份
         province_map: Dict[str, str] = {}
         if order_ids_needed:
-            result = await self.db.execute(
-                select(Order.order_id, Order.province_name).where(
-                    Order.order_id.in_(list(order_ids_needed))
+            # 注意：SQLite 变量上限 999，需分片查询
+            for chunk in self._chunk_list(list(order_ids_needed), self.SQLITE_IN_CLAUSE_CHUNK_SIZE):
+                result = await self.db.execute(
+                    select(Order.order_id, Order.province_name).where(Order.order_id.in_(chunk))
                 )
-            )
-            for row in result.all():
-                province_map[row[0]] = row[1]
+                for row in result.all():
+                    province_map[row[0]] = row[1]
         
         # 3. 补充省份信息
         for record in records:
@@ -318,53 +348,59 @@ class ExcelImportService:
         
         # 4. 批量查询已存在的售后单（用于统计 created/updated）
         aftersale_ids = [r["aftersale_id"] for r in records]
-        exist_result = await self.db.execute(
-            select(AfterSale.aftersale_id).where(AfterSale.aftersale_id.in_(aftersale_ids))
-        )
-        existing_ids: Set[str] = set(row[0] for row in exist_result.all())
+        existing_ids: Set[str] = set()
+        for chunk in self._chunk_list(aftersale_ids, self.SQLITE_IN_CLAUSE_CHUNK_SIZE):
+            exist_result = await self.db.execute(
+                select(AfterSale.aftersale_id).where(AfterSale.aftersale_id.in_(chunk))
+            )
+            existing_ids.update(row[0] for row in exist_result.all())
 
         # 5. 批量 upsert（避免逐条 UPDATE）
         now = datetime.now()
         for record in records:
             record.setdefault("created_at", now)
 
-        stmt = sqlite_insert(AfterSale).values(records)
-        stmt = stmt.on_conflict_do_update(
-            index_elements=["aftersale_id"],
-            set_={
-                "order_id": stmt.excluded.order_id,
-                "sku_id": stmt.excluded.sku_id,
-                "sku_code": stmt.excluded.sku_code,
-                "aftersale_type": stmt.excluded.aftersale_type,
-                "aftersale_status": stmt.excluded.aftersale_status,
-                "aftersale_status_desc": stmt.excluded.aftersale_status_desc,
-                "reason_text": stmt.excluded.reason_text,
-                "reason_code": stmt.excluded.reason_code,
-                "is_quality_issue": stmt.excluded.is_quality_issue,
-                "apply_time": stmt.excluded.apply_time,
-                "finish_time": stmt.excluded.finish_time,
-                "province_name": stmt.excluded.province_name,
-                "updated_at": stmt.excluded.updated_at,
-            },
-        )
-        await self.db.execute(stmt)
+        # 注意：SQLite 变量上限 999，多行 VALUES 需要分片执行
+        for chunk_records in self._chunk_records_by_sql_vars(records):
+            stmt = sqlite_insert(AfterSale).values(chunk_records)
+            stmt = stmt.on_conflict_do_update(
+                index_elements=["aftersale_id"],
+                set_={
+                    "order_id": stmt.excluded.order_id,
+                    "sku_id": stmt.excluded.sku_id,
+                    "sku_code": stmt.excluded.sku_code,
+                    "aftersale_type": stmt.excluded.aftersale_type,
+                    "aftersale_status": stmt.excluded.aftersale_status,
+                    "aftersale_status_desc": stmt.excluded.aftersale_status_desc,
+                    "reason_text": stmt.excluded.reason_text,
+                    "reason_code": stmt.excluded.reason_code,
+                    "is_quality_issue": stmt.excluded.is_quality_issue,
+                    "apply_time": stmt.excluded.apply_time,
+                    "finish_time": stmt.excluded.finish_time,
+                    "province_name": stmt.excluded.province_name,
+                    "updated_at": stmt.excluded.updated_at,
+                },
+            )
+            await self.db.execute(stmt)
 
         stats["created"] = sum(1 for aid in aftersale_ids if aid not in existing_ids)
         stats["updated"] = sum(1 for aid in aftersale_ids if aid in existing_ids)
         
         # 6. 退货退款类型的售后，标记对应订单为已签收
         # 原因：退货退款意味着买家已收到货并退回，可以确认已签收
-        refund_order_ids = [
+        refund_order_ids = list({
             r["order_id"] for r in records 
             if r["aftersale_type"] == 1 and r["order_id"]
-        ]
+        })
         if refund_order_ids:
-            await self.db.execute(
-                update(Order)
-                .where(Order.order_id.in_(refund_order_ids))
-                .where(Order.is_signed == False)
-                .values(is_signed=True)
-            )
+            # 注意：SQLite 变量上限 999，需分片更新
+            for chunk in self._chunk_list(refund_order_ids, self.SQLITE_IN_CLAUSE_CHUNK_SIZE):
+                await self.db.execute(
+                    update(Order)
+                    .where(Order.order_id.in_(chunk))
+                    .where(Order.is_signed.is_(False))
+                    .values(is_signed=True)
+                )
         
         # 7. 提交事务（每批次一次提交）
         await self.db.commit()
