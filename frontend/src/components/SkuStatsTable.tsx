@@ -111,7 +111,7 @@ export default function SkuStatsTable({ compact = false }: Props) {
         params.top_n = topN
       }
       
-      const response = await statsApi.getSkuStats(params) as {
+      const response = await statsApi.getSkuStats(params) as unknown as {
         items: SkuStats[]
         total: number
         is_realtime: boolean
@@ -226,7 +226,7 @@ export default function SkuStatsTable({ compact = false }: Props) {
         setLogisticsTask(null)
         try {
           // 默认不限制：由后端按批次把符合条件的订单全部处理（limit=0）
-          const response = await logisticsApi.checkAll() as {
+          const response = await logisticsApi.checkAll() as unknown as {
             task_id: string | null
             count: number
           }
@@ -253,7 +253,7 @@ export default function SkuStatsTable({ compact = false }: Props) {
   const startLogisticsPolling = (taskId: string) => {
     const poll = async () => {
       try {
-        const status = await logisticsApi.getCheckStatus(taskId) as LogisticsTask
+        const status = await logisticsApi.getCheckStatus(taskId) as unknown as LogisticsTask
         setLogisticsTask(status)
         
         if (status.status === 'completed') {

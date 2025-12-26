@@ -98,7 +98,7 @@ export default function OrderList() {
         params.end_date = dateRange[1].format('YYYY-MM-DD')
       }
       
-      const response = await ordersApi.getOrders(params) as OrderListResponse
+      const response = await ordersApi.getOrders(params) as unknown as OrderListResponse
       setData(response.items || [])
       setTotal(response.total || 0)
     } catch (error) {
@@ -150,7 +150,7 @@ export default function OrderList() {
         record.logistics_code,
         record.logistics_status_desc || '申通快递'
       )
-      setLogisticsData(response as typeof logisticsData)
+      setLogisticsData(response as unknown as typeof logisticsData)
     } catch (error) {
       console.error('查询物流失败:', error)
       message.error('查询物流失败')

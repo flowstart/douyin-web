@@ -46,7 +46,7 @@ export default function OrderTrendChart({ compact = false }: Props) {
         params.end_date = dateRange[1].format('YYYY-MM-DD')
       }
       
-      const response = await statsApi.getOrderTrend(params) as TrendItem[]
+      const response = await statsApi.getOrderTrend(params) as unknown as TrendItem[]
       setData(response || [])
     } catch (error) {
       console.error('获取订单趋势失败:', error)

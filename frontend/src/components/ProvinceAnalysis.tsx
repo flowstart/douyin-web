@@ -55,7 +55,7 @@ export default function ProvinceAnalysis() {
         params.end_date = dateRange[1].format('YYYY-MM-DD')
       }
       
-      const response = await statsApi.getProvinceStats(params) as { items: ProvinceItem[] }
+      const response = await statsApi.getProvinceStats(params) as unknown as { items: ProvinceItem[] }
       setProvinceData(response.items || [])
     } catch (error) {
       console.error('加载省份统计失败:', error)
@@ -77,7 +77,7 @@ export default function ProvinceAnalysis() {
         params.end_date = dateRange[1].format('YYYY-MM-DD')
       }
       
-      const response = await statsApi.getProvinceSkuStats(params) as { items: ProvinceSkuItem[] }
+      const response = await statsApi.getProvinceSkuStats(params) as unknown as { items: ProvinceSkuItem[] }
       setProvinceSkuData(response.items || [])
     } catch (error) {
       console.error('加载省份SKU统计失败:', error)

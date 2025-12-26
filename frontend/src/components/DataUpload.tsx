@@ -81,7 +81,7 @@ export default function DataUpload() {
   const fetchTaskList = useCallback(async () => {
     try {
       setTaskListLoading(true)
-      const result = await uploadApi.listTasks() as { tasks: TaskRecord[]; count: number }
+      const result = await uploadApi.listTasks() as unknown as { tasks: TaskRecord[]; count: number }
       setTaskList(result.tasks || [])
     } catch (error) {
       console.error('获取任务列表失败:', error)
@@ -107,7 +107,7 @@ export default function DataUpload() {
   // 轮询任务状态
   const pollTaskStatus = useCallback(async (id: string) => {
     try {
-      const status = await uploadApi.getTaskStatus(id) as TaskRecord
+      const status = await uploadApi.getTaskStatus(id) as unknown as TaskRecord
       setTaskProgress(status.progress || status.status)
 
       if (status.status === 'completed') {
@@ -182,7 +182,7 @@ export default function DataUpload() {
     setLoading(true)
     setTaskProgress('正在上传文件...')
     try {
-      const result = await uploadApi.uploadOrders(ordersFile.originFileObj) as { task_id: string; message: string }
+      const result = await uploadApi.uploadOrders(ordersFile.originFileObj) as unknown as { task_id: string; message: string }
       message.info(result.message)
       startPolling(result.task_id)
       fetchTaskList() // 刷新任务列表
@@ -204,7 +204,7 @@ export default function DataUpload() {
     setLoading(true)
     setTaskProgress('正在上传文件...')
     try {
-      const result = await uploadApi.uploadAftersales(aftersalesFile.originFileObj) as { task_id: string; message: string }
+      const result = await uploadApi.uploadAftersales(aftersalesFile.originFileObj) as unknown as { task_id: string; message: string }
       message.info(result.message)
       startPolling(result.task_id)
       fetchTaskList() // 刷新任务列表
@@ -225,7 +225,7 @@ export default function DataUpload() {
       message.success('已启动物流状态查询任务')
       
       // 获取物流统计
-      const stats = await logisticsApi.getStats()
+      const stats = await logisticsApi.getStats() as unknown as LogisticsStats
       setLogisticsStats(stats)
       setCurrentStep(3)
     } catch (error: unknown) {
@@ -240,7 +240,7 @@ export default function DataUpload() {
   const handleCalculateStats = async () => {
     setLoading(true)
     try {
-      const result = await statsApi.calculateStats()
+      const result = await statsApi.calculateStats() as unknown as { count: number }
       setSkuStatsCount(result.count || 0)
       message.success(`统计计算完成: ${result.count} 个SKU`)
       setCurrentStep(4)
@@ -265,7 +265,7 @@ export default function DataUpload() {
       const result = await uploadApi.uploadAll(
         ordersFile.originFileObj,
         aftersalesFile.originFileObj
-      ) as { task_id: string; message: string }
+      ) as unknown as { task_id: string; message: string }
       message.info(result.message)
       startPolling(result.task_id)
       fetchTaskList() // 刷新任务列表

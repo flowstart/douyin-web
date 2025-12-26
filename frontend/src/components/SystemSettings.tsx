@@ -38,7 +38,7 @@ export default function SystemSettings() {
   const loadConfigs = async () => {
     setLoading(true)
     try {
-      const configs = await configApi.getAll() as ConfigItem[]
+      const configs = await configApi.getAll() as unknown as ConfigItem[]
       
       // 转换为表单数据
       const formData: Record<string, string | number> = {}

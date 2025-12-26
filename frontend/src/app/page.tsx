@@ -52,7 +52,7 @@ export default function Home() {
   const loadSummary = async () => {
     setSummaryLoading(true)
     try {
-      const data = await statsApi.getSummary() as StatsSummary
+      const data = await statsApi.getSummary() as unknown as StatsSummary
       setSummary(data)
     } catch (error) {
       console.error('加载汇总数据失败:', error)
