@@ -1,0 +1,55 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+ENV/
+env/
+.venv/
+
+# Environment files
+.env
+*.env.local
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Node
+node_modules/
+dist/
+.nuxt/
+.output/
+.next/
+
+# Logs
+*.log
+logs/
+
+# Temporary files
+*.tmp
+*.temp
+.~*
+
+# Build
+build/
+*.egg-info/
+
+# Database
+*.db
+*.db-shm
+*.db-wal
+
+# Uploads (generated files)
+backend/uploads/
+
+# SKU images (can be regenerated)
+backend/uploads/sku_images/

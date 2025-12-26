@@ -1,0 +1,24 @@
+第一步：登录抖店开放平台
+访问：https://op.jinritemai.com/
+使用您的抖店商家账号登录（登录抖店后台的那个账号）
+
+第二步：创建应用获取 App Key 和 App Secret
+登录后点击右上角「控制台」
+进入「应用管理」→「创建应用」
+填写应用信息：
+应用名称：随便填，如"订单统计系统"
+应用类型：选择「自用型应用」
+创建成功后，在应用详情页可以看到 App Key 和 App Secret
+
+第三步：获取 Shop ID（店铺ID）
+登录抖店商家后台：https://fxg.jinritemai.com/
+点击右上角店铺名称，下拉菜单中会显示「店铺ID」
+或者在浏览器地址栏中，shop_id= 后面的数字就是店铺ID
+
+第四步：申请 API 权限
+在开放平台的应用详情页，点击「能力管理」，申请以下权限：
+✅ 订单列表查询 (order.searchList)
+✅ 订单详情查询 (order.orderDetail)
+✅ 售后单列表 (afterSale.List)
+✅ 售后单详情 (afterSale.Detail)
+✅ 物流轨迹查询 (logistics.trackNoRouteDetail)

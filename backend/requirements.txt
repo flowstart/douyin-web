@@ -1,0 +1,26 @@
+# FastAPI 核心
+fastapi==0.109.2
+uvicorn[standard]==0.27.1
+python-multipart==0.0.9
+
+# 数据库
+sqlalchemy>=2.0.45
+aiosqlite==0.19.0
+
+# HTTP 客户端
+httpx==0.26.0
+
+# 配置管理
+python-dotenv==1.0.1
+pydantic-settings==2.1.0
+
+# 工具
+python-dateutil==2.8.2
+
+# Excel处理
+pandas==2.2.0
+openpyxl==3.1.2
+
+# 开发工具
+alembic==1.13.1
+
