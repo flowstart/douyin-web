@@ -218,92 +218,138 @@ docker-compose down
 
 ---
 
-## 方式二：传统部署
+## 方式二：传统部署（PM2 统一管理）
 
-### 1. 后端部署
+> 推荐使用 PM2 统一管理前后端服务，便于监控和维护。
+
+### 1. 安装基础环境
 
 ```bash
 # 1. 安装 Python 3.11
 sudo apt update
 sudo apt install python3.11 python3.11-venv python3-pip
 
-# 2. 创建项目目录
-sudo mkdir -p /var/www/douyin-web
-sudo chown $USER:$USER /var/www/douyin-web
-
-# 3. 上传代码
-cd /var/www/douyin-web
-git clone https://github.com/flowstart/douyin-web.git .
-
-# 4. 创建虚拟环境
-cd backend
-python3.11 -m venv venv
-source venv/bin/activate
-
-# 5. 安装依赖
-pip install -r requirements.txt
-
-# 6. 配置环境变量
-cp env.example .env
-vim .env  # 填入生产环境配置
-
-# 7. 创建 Systemd 服务
-sudo tee /etc/systemd/system/douyin-backend.service << EOF
-[Unit]
-Description=Douyin Backend API
-After=network.target
-
-[Service]
-Type=simple
-User=$USER
-WorkingDirectory=/var/www/douyin-web/backend
-Environment="PATH=/var/www/douyin-web/backend/venv/bin"
-EnvironmentFile=/var/www/douyin-web/backend/.env
-ExecStart=/var/www/douyin-web/backend/venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000 --workers 4
-Restart=always
-RestartSec=10
-
-[Install]
-WantedBy=multi-user.target
-EOF
-
-# 8. 启动服务
-sudo systemctl daemon-reload
-sudo systemctl enable douyin-backend
-sudo systemctl start douyin-backend
-
-# 9. 检查状态
-sudo systemctl status douyin-backend
-```
-
-### 2. 前端部署
-
-```bash
-# 1. 安装 Node.js 18
+# 2. 安装 Node.js 18
 curl -fsSL https://deb.nodesource.com/setup_18.x | sudo -E bash -
 sudo apt install -y nodejs
 
-# 2. 构建前端
+# 3. 安装 PM2
+sudo npm install -g pm2
+```
+
+### 2. 部署代码
+
+```bash
+# 1. 创建项目目录
+sudo mkdir -p /var/www/douyin-web
+sudo chown $USER:$USER /var/www/douyin-web
+
+# 2. 克隆代码
+cd /var/www/douyin-web
+git clone https://github.com/flowstart/douyin-web.git .
+
+# 3. 创建日志目录
+mkdir -p logs
+```
+
+### 3. 配置后端
+
+```bash
+cd /var/www/douyin-web/backend
+
+# 1. 创建虚拟环境
+python3.11 -m venv venv
+source venv/bin/activate
+
+# 2. 安装依赖
+pip install -r requirements.txt
+
+# 3. 配置环境变量
+cp env.example .env
+vim .env  # 填入生产环境配置
+```
+
+### 4. 配置前端
+
+前端 API 地址通过 `.env.production` 文件配置，避免遗忘：
+
+```bash
 cd /var/www/douyin-web/frontend
 
-# 3. 安装依赖
+# 1. 创建生产环境配置（重要！）
+cat > .env.production << 'EOF'
+# 生产环境 API 地址
+NEXT_PUBLIC_API_URL=https://your-domain.com/api
+EOF
+
+# 2. 安装依赖
 npm ci
 
-# 4. 设置 API 地址（修改 src/lib/api.ts 或使用环境变量）
-export NEXT_PUBLIC_API_URL=https://your-domain.com/api
-
-# 5. 构建生产版本
+# 3. 构建生产版本（会自动读取 .env.production）
 npm run build
+```
 
-# 6. 使用 PM2 管理进程
-sudo npm install -g pm2
+**环境配置文件说明：**
 
-# 7. 启动应用
-pm2 start npm --name "douyin-frontend" -- start
+| 文件 | 用途 | 是否提交到 Git |
+|------|------|----------------|
+| `.env.example` | 配置示例模板 | ✅ 是 |
+| `.env.local` | 本地开发配置 | ❌ 否 |
+| `.env.production` | 生产环境配置 | ❌ 否 |
 
-# 8. 设置开机自启
+### 5. 使用 PM2 统一管理
+
+项目根目录已包含 `ecosystem.config.js` 配置文件：
+
+```bash
+cd /var/www/douyin-web
+
+# 启动所有服务
+pm2 start ecosystem.config.js
+
+# 查看状态
+pm2 status
+
+# 查看日志
+pm2 logs
+
+# 设置开机自启
 pm2 startup
 pm2 save
+```
+
+**PM2 常用命令：**
+
+```bash
+# 重启所有服务
+pm2 restart all
+
+# 重启单个服务
+pm2 restart douyin-backend
+pm2 restart douyin-frontend
+
+# 停止服务
+pm2 stop all
+
+# 删除服务
+pm2 delete all
+
+# 监控面板
+pm2 monit
+```
+
+### 6. 手动启动（不使用 ecosystem.config.js）
+
+如果不使用配置文件，也可以手动启动：
+
+```bash
+# 启动后端
+cd /var/www/douyin-web/backend
+pm2 start "venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000" --name douyin-backend
+
+# 启动前端
+cd /var/www/douyin-web/frontend
+pm2 start npm --name douyin-frontend -- start
 ```
 
 ---
@@ -483,11 +529,13 @@ sudo chmod 600 /etc/nginx/ssl/*.pem
 ### 日志位置
 
 ```bash
-# 后端日志
-journalctl -u douyin-backend -f
+# PM2 日志（推荐）
+pm2 logs                    # 查看所有服务日志
+pm2 logs douyin-backend     # 查看后端日志
+pm2 logs douyin-frontend    # 查看前端日志
 
-# 前端日志
-pm2 logs douyin-frontend
+# 日志文件位置
+ls -la /var/www/douyin-web/logs/
 
 # Nginx 日志
 tail -f /var/log/nginx/access.log
@@ -507,11 +555,11 @@ curl http://localhost:3000
 ### 进程监控
 
 ```bash
-# 查看后端状态
-sudo systemctl status douyin-backend
-
-# 查看前端状态
+# PM2 状态面板
 pm2 status
+
+# PM2 实时监控
+pm2 monit
 
 # 查看资源使用
 htop
@@ -560,22 +608,41 @@ pip install aiomysql
 
 **检查步骤：**
 ```bash
-# 查看日志
-journalctl -u douyin-backend -n 50
+# 查看 PM2 日志
+pm2 logs douyin-backend --lines 50
 
 # 检查端口占用
 lsof -i :8000
 
 # 检查环境变量
 cat /var/www/douyin-web/backend/.env
+
+# 手动测试启动
+cd /var/www/douyin-web/backend
+source venv/bin/activate
+python -m uvicorn app.main:app --host 127.0.0.1 --port 8000
 ```
 
 ### Q: 前端无法访问 API
 
 **检查步骤：**
-1. 确认 `NEXT_PUBLIC_API_URL` 配置正确
-2. 检查 Nginx 反向代理配置
-3. 确认后端服务正在运行
+```bash
+# 1. 检查前端环境配置
+cat /var/www/douyin-web/frontend/.env.production
+
+# 2. 确认后端服务正在运行
+pm2 status
+curl http://localhost:8000/health
+
+# 3. 检查 Nginx 配置
+sudo nginx -t
+sudo tail -f /var/log/nginx/error.log
+
+# 4. 如果修改了环境变量，需要重新构建
+cd /var/www/douyin-web/frontend
+npm run build
+pm2 restart douyin-frontend
+```
 
 ### Q: 上传文件失败
 
