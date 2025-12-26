@@ -4,7 +4,7 @@
 from datetime import date, datetime, timedelta
 from typing import Optional, List
 from fastapi import APIRouter, Depends, Query, HTTPException
-from sqlalchemy import select, func, and_, extract
+from sqlalchemy import select, func, and_, extract, case
 from sqlalchemy.ext.asyncio import AsyncSession
 from pydantic import BaseModel
 
@@ -185,9 +185,9 @@ async def get_order_trend(
         stmt = select(
             func.strftime('%Y-%m-%d', Order.pay_time).label("date_label"),
             func.count().label("order_count"),
-            func.sum(func.iif(Order.order_status == 2, 1, 0)).label("pending_ship_count"),
-            func.sum(func.iif(Order.order_status == 3, 1, 0)).label("shipped_count"),
-            func.sum(func.iif(Order.order_status == 4, 1, 0)).label("refunded_count"),
+            func.sum(case((Order.order_status == 2, 1), else_=0)).label("pending_ship_count"),
+            func.sum(case((Order.order_status == 3, 1), else_=0)).label("shipped_count"),
+            func.sum(case((Order.order_status == 4, 1), else_=0)).label("refunded_count"),
         ).where(
             and_(
                 Order.pay_time >= start_dt,
@@ -215,9 +215,9 @@ async def get_order_trend(
         stmt = select(
             func.strftime('%Y-%m-%d %H:00', Order.pay_time).label("hour_label"),
             func.count().label("order_count"),
-            func.sum(func.iif(Order.order_status == 2, 1, 0)).label("pending_ship_count"),
-            func.sum(func.iif(Order.order_status == 3, 1, 0)).label("shipped_count"),
-            func.sum(func.iif(Order.order_status == 4, 1, 0)).label("refunded_count"),
+            func.sum(case((Order.order_status == 2, 1), else_=0)).label("pending_ship_count"),
+            func.sum(case((Order.order_status == 3, 1), else_=0)).label("shipped_count"),
+            func.sum(case((Order.order_status == 4, 1), else_=0)).label("refunded_count"),
         ).where(
             and_(
                 Order.pay_time >= start_dt,
