@@ -4,7 +4,7 @@
 from datetime import date, datetime, timedelta
 from typing import Optional, List
 from fastapi import APIRouter, Depends, Query, HTTPException
-from sqlalchemy import select, func, and_, extract, case
+from sqlalchemy import select, func, and_, extract, case, union
 from sqlalchemy.ext.asyncio import AsyncSession
 from pydantic import BaseModel
 
@@ -309,96 +309,143 @@ async def get_province_sku_stats(
     else:
         end_dt = datetime.now()
     
-    # 1. 查询每个省份每个SKU的订单数
-    order_conditions = [
+    # 口径对齐（与 SKU 统计一致）：
+    # - 订单数：已签收订单（Order.is_signed=True），按 pay_time 窗口过滤；
+    #          union distinct(order_id) 融合 ordersku 与 aftersale 两个来源，避免缺失且去重；
+    # - 退货数：已签收 + 退货退款(aftersale_type=1) + sku_code 非空，count(distinct order_id)，按 pay_time 窗口过滤；
+    # - 仍按 省份 x SKU 聚合。
+
+    # 1) 订单数：union distinct(province_name, sku_code, order_id)
+    signed_from_ordersku_conditions = [
+        Order.is_signed == True,
         Order.pay_time >= start_dt,
         Order.pay_time <= end_dt,
         Order.province_name.isnot(None),
         Order.province_name != "",
+        OrderSku.sku_code.isnot(None),
     ]
     if province_name:
-        order_conditions.append(Order.province_name == province_name)
-    
-    order_stmt = select(
-        Order.province_name,
-        OrderSku.sku_code,
-        func.max(OrderSku.sku_name).label("sku_name"),
-        func.count().label("order_count"),
-    ).select_from(Order).join(
-        OrderSku, Order.order_id == OrderSku.order_id
-    ).where(
-        and_(*order_conditions)
-    )
-    
-    if sku_code:
-        order_stmt = order_stmt.where(OrderSku.sku_code.contains(sku_code))
-    
-    order_stmt = order_stmt.group_by(
-        Order.province_name, OrderSku.sku_code
-    ).limit(limit)
-    
-    order_result = await db.execute(order_stmt)
-    order_data = {}  # key: (province, sku_code), value: {order_count, sku_name}
-    for row in order_result.all():
-        key = (row.province_name, row.sku_code)
-        order_data[key] = {
-            "order_count": row.order_count,
-            "sku_name": row.sku_name,
-        }
-    
-    # 2. 查询每个省份每个SKU的退货数
-    return_conditions = [
-        AfterSale.apply_time >= start_dt,
-        AfterSale.apply_time <= end_dt,
-        AfterSale.aftersale_type == 1,  # 退货退款
+        signed_from_ordersku_conditions.append(Order.province_name == province_name)
+
+    signed_from_aftersale_conditions = [
+        Order.is_signed == True,
+        Order.pay_time >= start_dt,
+        Order.pay_time <= end_dt,
         AfterSale.province_name.isnot(None),
         AfterSale.province_name != "",
+        AfterSale.sku_code.isnot(None),
+    ]
+    if province_name:
+        signed_from_aftersale_conditions.append(AfterSale.province_name == province_name)
+
+    if sku_code:
+        signed_from_ordersku_conditions.append(OrderSku.sku_code.contains(sku_code))
+        signed_from_aftersale_conditions.append(AfterSale.sku_code.contains(sku_code))
+
+    signed_ordersku_q = select(
+        Order.province_name.label("province_name"),
+        OrderSku.sku_code.label("sku_code"),
+        Order.order_id.label("order_id"),
+    ).select_from(Order).join(
+        OrderSku, Order.order_id == OrderSku.order_id
+    ).where(and_(*signed_from_ordersku_conditions))
+
+    signed_aftersale_q = select(
+        AfterSale.province_name.label("province_name"),
+        AfterSale.sku_code.label("sku_code"),
+        Order.order_id.label("order_id"),
+    ).select_from(AfterSale).join(
+        Order, AfterSale.order_id == Order.order_id
+    ).where(and_(*signed_from_aftersale_conditions))
+
+    signed_union = union(signed_ordersku_q, signed_aftersale_q).subquery("signed_union")
+
+    order_counts_subq = select(
+        signed_union.c.province_name,
+        signed_union.c.sku_code,
+        func.count(func.distinct(signed_union.c.order_id)).label("order_count"),
+    ).group_by(
+        signed_union.c.province_name,
+        signed_union.c.sku_code,
+    ).subquery("order_counts")
+
+    # 2) 退货数：已签收 + 退货退款 + sku_code非空，distinct order_id
+    return_conditions = [
+        Order.is_signed == True,
+        Order.pay_time >= start_dt,
+        Order.pay_time <= end_dt,
+        AfterSale.aftersale_type == 1,
+        AfterSale.province_name.isnot(None),
+        AfterSale.province_name != "",
+        AfterSale.sku_code.isnot(None),
     ]
     if province_name:
         return_conditions.append(AfterSale.province_name == province_name)
-    
-    return_stmt = select(
+    if sku_code:
+        return_conditions.append(AfterSale.sku_code.contains(sku_code))
+
+    return_counts_subq = select(
+        AfterSale.province_name.label("province_name"),
+        AfterSale.sku_code.label("sku_code"),
+        func.count(func.distinct(Order.order_id)).label("return_count"),
+    ).select_from(AfterSale).join(
+        Order, AfterSale.order_id == Order.order_id
+    ).where(and_(*return_conditions)).group_by(
         AfterSale.province_name,
         AfterSale.sku_code,
-        func.count().label("return_count"),
-    ).where(
-        and_(*return_conditions)
-    )
-    
-    if sku_code:
-        return_stmt = return_stmt.where(AfterSale.sku_code.contains(sku_code))
-    
-    return_stmt = return_stmt.group_by(
-        AfterSale.province_name, AfterSale.sku_code
-    )
-    
-    return_result = await db.execute(return_stmt)
-    return_data = {}  # key: (province, sku_code), value: return_count
-    for row in return_result.all():
-        key = (row.province_name, row.sku_code)
-        return_data[key] = row.return_count
-    
-    # 3. 合并数据
+    ).subquery("return_counts")
+
+    # 3) 合并 + 计算退货率（按退货率降序）
+    return_count_col = func.coalesce(return_counts_subq.c.return_count, 0)
+    return_rate_col = case(
+        (order_counts_subq.c.order_count > 0, return_count_col * 1.0 / order_counts_subq.c.order_count),
+        else_=0,
+    ).label("return_rate")
+
+    stmt = select(
+        order_counts_subq.c.province_name,
+        order_counts_subq.c.sku_code,
+        order_counts_subq.c.order_count,
+        return_count_col.label("return_count"),
+        return_rate_col,
+    ).select_from(order_counts_subq).outerjoin(
+        return_counts_subq,
+        and_(
+            return_counts_subq.c.province_name == order_counts_subq.c.province_name,
+            return_counts_subq.c.sku_code == order_counts_subq.c.sku_code,
+        ),
+    ).order_by(
+        return_rate_col.desc()
+    ).limit(limit)
+
+    result = await db.execute(stmt)
+    rows = result.all()
+
+    # 补充 sku_name（仅能从 order_skus 获取；after_sales-only 的 sku 可能为空）
+    sku_codes = [r.sku_code for r in rows if r.sku_code]
+    sku_name_map = {}
+    if sku_codes:
+        sku_name_stmt = select(
+            OrderSku.sku_code,
+            func.max(OrderSku.sku_name).label("sku_name"),
+        ).where(
+            OrderSku.sku_code.in_(list(set(sku_codes)))
+        ).group_by(OrderSku.sku_code)
+        sku_name_result = await db.execute(sku_name_stmt)
+        sku_name_map = {r.sku_code: r.sku_name for r in sku_name_result.all() if r.sku_code}
+
     items = []
-    for (prov, sku), data in order_data.items():
-        return_count = return_data.get((prov, sku), 0)
-        order_count = data["order_count"]
-        return_rate = return_count / order_count if order_count > 0 else 0
-        
-        items.append({
-            "province_name": prov,
-            "sku_code": sku,
-            "sku_name": data["sku_name"],
-            "order_count": order_count,
-            "return_count": return_count,
-            "return_rate": round(return_rate, 4),
-        })
-    
-    # 按退货率降序排序
-    items.sort(key=lambda x: x["return_rate"], reverse=True)
-    
-    return {
-        "items": items,
-        "total": len(items),
-    }
+    for r in rows:
+        items.append(
+            {
+                "province_name": r.province_name,
+                "sku_code": r.sku_code,
+                "sku_name": sku_name_map.get(r.sku_code),
+                "order_count": int(r.order_count or 0),
+                "return_count": int(r.return_count or 0),
+                "return_rate": round(float(r.return_rate or 0), 4),
+            }
+        )
+
+    return {"items": items, "total": len(items)}
 

@@ -3,7 +3,7 @@
 """
 from datetime import datetime, date, timedelta
 from typing import List, Optional, Dict, Any
-from sqlalchemy import select, func, and_, case, or_
+from sqlalchemy import select, func, and_, case, or_, union
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.order import Order, OrderSku
@@ -539,57 +539,102 @@ class StatsService:
             end_dt = datetime.combine(end_date, datetime.max.time())
         else:
             end_dt = datetime.now()
-        
-        # 基础查询 - 退货统计（按订单支付时间窗口过滤）
-        stmt = select(
-            AfterSale.province_name,
-            func.count().label("return_count"),
+
+        # 口径对齐（与 SKU 统计一致）：
+        # - 订单数：已签收订单（Order.is_signed=True），按 pay_time 窗口过滤；
+        #          union distinct(order_id) 融合 ordersku 与 aftersale 两个来源，避免缺失且去重；
+        #          仅统计 sku_code 非空的订单（与 SKU 维度统计一致）。
+        # - 退货数：已签收 + 退货退款(aftersale_type=1) + sku_code 非空，count(distinct order_id)，按 pay_time 窗口过滤。
+
+        # 1) 省份订单数：union distinct(province_name, order_id)
+        signed_orders_from_ordersku_conditions = [
+            Order.is_signed == True,
+            Order.pay_time >= start_dt,
+            Order.pay_time <= end_dt,
+            Order.province_name.isnot(None),
+            Order.province_name != "",
+            OrderSku.sku_code.isnot(None),
+        ]
+        if sku_code:
+            signed_orders_from_ordersku_conditions.append(OrderSku.sku_code == sku_code)
+
+        signed_orders_from_aftersale_conditions = [
+            Order.is_signed == True,
+            Order.pay_time >= start_dt,
+            Order.pay_time <= end_dt,
+            AfterSale.province_name.isnot(None),
+            AfterSale.province_name != "",
+            AfterSale.sku_code.isnot(None),
+        ]
+        if sku_code:
+            signed_orders_from_aftersale_conditions.append(AfterSale.sku_code == sku_code)
+
+        signed_orders_from_ordersku = select(
+            Order.province_name.label("province_name"),
+            Order.order_id.label("order_id"),
+        ).select_from(Order).join(
+            OrderSku, Order.order_id == OrderSku.order_id
+        ).where(and_(*signed_orders_from_ordersku_conditions))
+
+        signed_orders_from_aftersale = select(
+            AfterSale.province_name.label("province_name"),
+            Order.order_id.label("order_id"),
         ).select_from(AfterSale).join(
             Order, AfterSale.order_id == Order.order_id
-        ).where(
-            and_(
-                Order.pay_time >= start_dt,
-                Order.pay_time <= end_dt,
-                AfterSale.aftersale_type == 1,  # 退货退款
-                AfterSale.province_name.isnot(None),
-            )
-        )
-        
-        if sku_code:
-            stmt = stmt.where(AfterSale.sku_code == sku_code)
-        
-        stmt = stmt.group_by(AfterSale.province_name)
-        
-        result = await self.db.execute(stmt)
-        return_stats = {row.province_name: row.return_count for row in result.all()}
-        
-        # 获取各省份订单总数（基于支付时间）
+        ).where(and_(*signed_orders_from_aftersale_conditions))
+
+        signed_orders_union = union(
+            signed_orders_from_ordersku,
+            signed_orders_from_aftersale,
+        ).subquery("signed_orders_union")
+
         order_stmt = select(
-            Order.province_name,
-            func.count().label("order_count"),
-        ).where(
-            and_(
-                Order.pay_time >= start_dt,
-                Order.pay_time <= end_dt,
-                Order.province_name.isnot(None),
-            )
-        ).group_by(Order.province_name)
-        
+            signed_orders_union.c.province_name,
+            func.count(func.distinct(signed_orders_union.c.order_id)).label("order_count"),
+        ).group_by(signed_orders_union.c.province_name)
+
         order_result = await self.db.execute(order_stmt)
-        order_stats = {row.province_name: row.order_count for row in order_result.all()}
+        order_stats = {row.province_name: int(row.order_count or 0) for row in order_result.all()}
+
+        # 2) 省份退货数：已签收 + 退货退款 + sku_code非空，distinct order_id
+        return_conditions = [
+            Order.is_signed == True,
+            Order.pay_time >= start_dt,
+            Order.pay_time <= end_dt,
+            AfterSale.aftersale_type == 1,  # 退货退款
+            AfterSale.province_name.isnot(None),
+            AfterSale.province_name != "",
+            AfterSale.sku_code.isnot(None),
+        ]
+        if sku_code:
+            return_conditions.append(AfterSale.sku_code == sku_code)
+
+        return_stmt = select(
+            AfterSale.province_name,
+            func.count(func.distinct(Order.order_id)).label("return_count"),
+        ).select_from(AfterSale).join(
+            Order, AfterSale.order_id == Order.order_id
+        ).where(and_(*return_conditions)).group_by(AfterSale.province_name)
+
+        return_result = await self.db.execute(return_stmt)
+        return_stats = {row.province_name: int(row.return_count or 0) for row in return_result.all()}
         
         # 计算退货率
         province_stats = []
-        for province, order_count in order_stats.items():
-            return_count = return_stats.get(province, 0)
-            return_rate = return_count / order_count if order_count > 0 else 0
-            
-            province_stats.append({
-                "province_name": province,
-                "order_count": order_count,
-                "return_count": return_count,
-                "return_rate": round(return_rate, 4),
-            })
+        all_provinces = set(order_stats.keys()) | set(return_stats.keys())
+        for province in all_provinces:
+            order_count = int(order_stats.get(province, 0) or 0)
+            return_count = int(return_stats.get(province, 0) or 0)
+            return_rate = (return_count / order_count) if order_count > 0 else 0
+
+            province_stats.append(
+                {
+                    "province_name": province,
+                    "order_count": order_count,
+                    "return_count": return_count,
+                    "return_rate": round(return_rate, 4),
+                }
+            )
         
         # 按退货率排序
         province_stats.sort(key=lambda x: x["return_rate"], reverse=True)

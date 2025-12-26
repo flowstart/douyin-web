@@ -194,13 +194,20 @@ class KD100Client:
             解析后的状态信息
         """
         # 状态码说明
-        # state: 0-在途 1-揽收 2-疑难 3-签收 4-退签 5-派件 6-退回 7-转投
+        # state（快递100）：
+        # - 常见：0-在途 1-揽收 2-疑难 3-签收 4-退签 5-派件 6-退回 7-转投
+        # - 兼容扩展：301/302/303/304 也视为“已签收”（不同产品线/接口可能返回扩展码）
         state = result.get("state", "")
+        signed_states = {"3", "301", "302", "303", "304"}
         status_map = {
             "0": {"status": "in_transit", "desc": "在途"},
             "1": {"status": "collected", "desc": "已揽收"},
             "2": {"status": "problem", "desc": "疑难"},
             "3": {"status": "signed", "desc": "已签收"},
+            "301": {"status": "signed", "desc": "已签收"},
+            "302": {"status": "signed", "desc": "已签收"},
+            "303": {"status": "signed", "desc": "已签收"},
+            "304": {"status": "signed", "desc": "已签收"},
             "4": {"status": "rejected", "desc": "退签"},
             "5": {"status": "delivering", "desc": "派件中"},
             "6": {"status": "returning", "desc": "退回"},
@@ -214,7 +221,7 @@ class KD100Client:
         latest_track = data[0] if data else None
         
         return {
-            "is_signed": state == "3",
+            "is_signed": str(state) in signed_states,
             "status": status_info["status"],
             "status_desc": status_info["desc"],
             "latest_time": latest_track.get("time") if latest_track else None,

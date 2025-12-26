@@ -5,7 +5,7 @@ import pandas as pd
 from datetime import datetime
 from typing import Dict, Any, List, Optional, Set
 import anyio
-from sqlalchemy import select, update, and_, delete
+from sqlalchemy import select, update, and_, delete, case
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -122,6 +122,9 @@ class ExcelImportService:
                 "city_name": str(row.get("市", "")).strip(),
                 "logistics_code": express_info["tracking_number"],
                 "logistics_company": express_info.get("company_name", ""),
+                # 已完成订单：导入时默认标记为已签收
+                # 注意：upsert 更新时会“保留已签收=true”，避免被导入的 False 覆盖掉物流/售后推断出的 True
+                "is_signed": order_status_str == "已完成",
                 "updated_at": datetime.now(),
             }
             records.append(order_data)
@@ -178,6 +181,11 @@ class ExcelImportService:
                     "city_name": stmt.excluded.city_name,
                     "logistics_code": stmt.excluded.logistics_code,
                     "logistics_company": stmt.excluded.logistics_company,
+                    # 保留已签收：若 DB 已签收=true，则不允许导入的 False 覆盖
+                    "is_signed": case(
+                        (Order.is_signed == True, True),
+                        else_=stmt.excluded.is_signed,
+                    ),
                     "updated_at": stmt.excluded.updated_at,
                 },
             )
