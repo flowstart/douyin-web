@@ -331,7 +331,7 @@ class StatsService:
             sku_stats = existing.scalar_one_or_none()
             
             if sku_stats:
-                # 更新（保留手动修改的退货率）
+                # 更新：若未手动修改，则使用本次计算值；若手动修改则保留原值
                 if not sku_stats.is_rate_manual:
                     sku_stats.estimated_return_rate = stats["estimated_return_rate"]
             else:
@@ -340,8 +340,19 @@ class StatsService:
                     sku_id=stats["sku_code"],
                     sku_code=sku_code,
                 )
+                # 新建记录：写入本次计算的退货率（否则会停留在模型 default=0.3）
+                sku_stats.estimated_return_rate = stats["estimated_return_rate"]
                 self.db.add(sku_stats)
             
+            # 选择最终生效的退货率：
+            # - 手动修改：保留 sku_stats.estimated_return_rate
+            # - 非手动：使用本次计算的 stats["estimated_return_rate"]
+            final_return_rate = (
+                float(sku_stats.estimated_return_rate)
+                if sku_stats.is_rate_manual
+                else float(stats["estimated_return_rate"])
+            )
+
             # 更新其他字段
             sku_stats.sku_name = stats["sku_name"]
             sku_stats.product_name = stats["product_name"]
@@ -350,8 +361,13 @@ class StatsService:
             sku_stats.signed_count = stats["signed_count"]
             sku_stats.signed_return_count = stats["signed_return_count"]
             sku_stats.in_transit_count = stats["in_transit_count"]
-            sku_stats.in_transit_return_estimate = stats["in_transit_return_estimate"]
-            sku_stats.stock_gap = stats["stock_gap"]
+            # 派生字段统一用 final_return_rate 计算，确保与退货率一致且不破坏手动修改
+            sku_stats.in_transit_return_estimate = int(sku_stats.in_transit_count * final_return_rate)
+            sku_stats.stock_gap = (
+                int(sku_stats.pending_ship_count)
+                - int(sku_stats.aftersale_pending_count)
+                - int(sku_stats.in_transit_return_estimate)
+            )
             sku_stats.quality_return_count = stats.get("quality_return_count", 0)
             sku_stats.quality_return_rate = stats.get("quality_return_rate", 0)
             sku_stats.last_calculated_at = now
