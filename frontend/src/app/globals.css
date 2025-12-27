@@ -57,3 +57,22 @@ a:hover {
   text-decoration: underline;
 }
 
+/* 图片悬停预览浮层样式 */
+.image-preview-popover .ant-popover-inner {
+  padding: 4px;
+  background: rgba(0, 0, 0, 0.9);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+}
+
+.image-preview-popover .ant-popover-inner-content {
+  padding: 0;
+}
+
+.image-preview-popover img {
+  max-width: 300px;
+  max-height: 400px;
+  display: block;
+  border-radius: 4px;
+  object-fit: contain;
+}

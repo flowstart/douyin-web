@@ -16,6 +16,7 @@ import {
   Progress,
   Upload,
   Image,
+  Popover,
 } from 'antd'
 import type { UploadChangeParam } from 'antd/es/upload'
 import {
@@ -68,6 +69,19 @@ export default function SkuStatsTable({ compact = false }: Props) {
   const [uploadingSkuCode, setUploadingSkuCode] = useState<string | null>(null)
   const [previewImage, setPreviewImage] = useState<string | null>(null)
   const [previewOpen, setPreviewOpen] = useState(false)
+
+  // 从 localStorage 读取图片时间戳
+  const getImageTimestamps = (): Record<string, number> => {
+    if (typeof window === 'undefined') return {}
+    try {
+      const stored = localStorage.getItem('sku_image_timestamps')
+      return stored ? JSON.parse(stored) : {}
+    } catch {
+      return {}
+    }
+  }
+
+  const [imageTimestamps, setImageTimestamps] = useState<Record<string, number>>(getImageTimestamps)
   
   // 筛选条件
   const [searchCode, setSearchCode] = useState('')
@@ -119,11 +133,14 @@ export default function SkuStatsTable({ compact = false }: Props) {
       setData(response.items || [])
       setTotal(response.total || 0)
       setIsRealtime(response.is_realtime || false)
-      
+
       // 从数据中获取最后计算时间
       if (response.items?.length > 0 && response.items[0].last_calculated_at) {
         setLastCalculatedAt(response.items[0].last_calculated_at)
       }
+
+      // 刷新图片时间戳（从 localStorage 读取最新值）
+      setImageTimestamps(getImageTimestamps())
     } catch (error) {
       console.error('获取SKU统计失败:', error)
       message.error('获取数据失败，请检查后端服务是否启动')
@@ -137,6 +154,33 @@ export default function SkuStatsTable({ compact = false }: Props) {
   useEffect(() => {
     fetchData()
   }, [pagination, sortInfo])
+
+  // 监听页面可见性变化和 localStorage 变化，确保图片时间戳同步
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      if (!document.hidden) {
+        setImageTimestamps(getImageTimestamps())
+      }
+    }
+
+    const handleStorageChange = (e: StorageEvent) => {
+      if (e.key === 'sku_image_timestamps' && e.newValue) {
+        try {
+          setImageTimestamps(JSON.parse(e.newValue))
+        } catch {
+          // 解析失败，忽略
+        }
+      }
+    }
+
+    document.addEventListener('visibilitychange', handleVisibilityChange)
+    window.addEventListener('storage', handleStorageChange)
+
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityChange)
+      window.removeEventListener('storage', handleStorageChange)
+    }
+  }, [])
 
   // 处理搜索（重置页码到第一页）
   const handleSearch = () => {
@@ -294,6 +338,14 @@ export default function SkuStatsTable({ compact = false }: Props) {
     try {
       await skuApi.uploadImage(skuCode, file)
       message.success('图片上传成功')
+      // 更新该SKU的图片时间戳，强制刷新缓存
+      const newTimestamps = {
+        ...getImageTimestamps(),
+        [skuCode]: Date.now()
+      }
+      // 保存到 localStorage
+      localStorage.setItem('sku_image_timestamps', JSON.stringify(newTimestamps))
+      setImageTimestamps(newTimestamps)
       fetchData() // 刷新数据
     } catch (error) {
       console.error('图片上传失败:', error)
@@ -304,8 +356,9 @@ export default function SkuStatsTable({ compact = false }: Props) {
   }
   
   // 图片预览
-  const handlePreview = (imageUrl: string) => {
-    setPreviewImage(`${API_BASE_URL}${imageUrl}`)
+  const handlePreview = (imageUrl: string, skuCode: string) => {
+    const timestamp = imageTimestamps[skuCode]
+    setPreviewImage(`${API_BASE_URL}${imageUrl}${timestamp ? `?t=${timestamp}` : ''}`)
     setPreviewOpen(true)
   }
 
@@ -322,47 +375,66 @@ export default function SkuStatsTable({ compact = false }: Props) {
         
         if (imageUrl) {
           // 有图片，显示缩略图
+          const timestamp = imageTimestamps[record.sku_code]
+          const fullImageUrl = `${API_BASE_URL}${imageUrl}${timestamp ? `?t=${timestamp}` : ''}`
+
           return (
-            <div style={{ position: 'relative', cursor: 'pointer' }}>
-              <Image
-                src={`${API_BASE_URL}${imageUrl}`}
-                alt={record.sku_name || record.sku_code}
-                width={50}
-                height={50}
-                style={{ objectFit: 'cover', borderRadius: 4 }}
-                preview={false}
-                onClick={() => handlePreview(imageUrl)}
-              />
-              <Upload
-                accept="image/*"
-                showUploadList={false}
-                beforeUpload={(file) => {
-                  handleImageUpload(record.sku_code, file)
-                  return false
-                }}
-              >
-                <div
-                  style={{
-                    position: 'absolute',
-                    top: 0,
-                    left: 0,
-                    right: 0,
-                    bottom: 0,
-                    background: 'rgba(0,0,0,0.5)',
-                    opacity: 0,
-                    transition: 'opacity 0.3s',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    borderRadius: 4,
+            <Popover
+              content={
+                <img
+                  src={fullImageUrl}
+                  alt={record.sku_name || record.sku_code}
+                  style={{ display: 'block' }}
+                />
+              }
+              trigger="hover"
+              placement="rightTop"
+              mouseEnterDelay={0.5}
+              overlayClassName="image-preview-popover"
+              arrow={false}
+            >
+              <div style={{ position: 'relative', cursor: 'pointer' }}>
+                <Image
+                  src={fullImageUrl}
+                  alt={record.sku_name || record.sku_code}
+                  width={50}
+                  height={50}
+                  style={{ objectFit: 'cover', borderRadius: 4 }}
+                  preview={false}
+                  onClick={() => handlePreview(imageUrl, record.sku_code)}
+                />
+                <Upload
+                  accept="image/*"
+                  showUploadList={false}
+                  beforeUpload={(file) => {
+                    handleImageUpload(record.sku_code, file)
+                    return false
                   }}
-                  onMouseEnter={(e) => (e.currentTarget.style.opacity = '1')}
-                  onMouseLeave={(e) => (e.currentTarget.style.opacity = '0')}
                 >
-                  <PlusOutlined style={{ color: '#fff', fontSize: 16 }} />
-                </div>
-              </Upload>
-            </div>
+                  <div
+                    style={{
+                      position: 'absolute',
+                      top: 0,
+                      left: 0,
+                      right: 0,
+                      bottom: 0,
+                      background: 'rgba(0,0,0,0.5)',
+                      opacity: 0,
+                      transition: 'opacity 0.3s',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      borderRadius: 4,
+                    }}
+                    onMouseEnter={(e) => (e.currentTarget.style.opacity = '1')}
+                    onMouseLeave={(e) => (e.currentTarget.style.opacity = '0')}
+                    onMouseMove={(e) => e.stopPropagation()}
+                  >
+                    <PlusOutlined style={{ color: '#fff', fontSize: 16 }} />
+                  </div>
+                </Upload>
+              </div>
+            </Popover>
           )
         }
         
